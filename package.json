@@ -1,0 +1,30 @@
+{
+  "name": "llm-content-grader",
+  "version": "1.0.0",
+  "description": "Audit content for LLM citation readiness. Grade pages 1-100 based on data from 1.2M ChatGPT citations.",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "mammoth": "^1.8.0",
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "syllable": "^5.0.1",
+    "html-to-text": "^9.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.5.0"
+  }
+}
