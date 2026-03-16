@@ -35,7 +35,14 @@ export async function POST(request: NextRequest) {
 
     const result = analyzeContent(content);
 
-    return NextResponse.json({ result, source: 'document', fileName: file.name });
+    return NextResponse.json({
+      result,
+      source: 'document',
+      fileName: file.name,
+      documentText: content.text,
+      paragraphs: content.paragraphs,
+      headings: content.headings,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: `Analysis failed: ${message}` }, { status: 500 });

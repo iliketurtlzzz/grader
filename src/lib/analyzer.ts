@@ -1,11 +1,22 @@
 // Core LLM Citation Grading Engine
 // Based on Growth Memo / Gauge analysis of 1.2M verified ChatGPT citations
 
+export interface InlineAnnotation {
+  text: string;
+  startIndex: number;
+  endIndex: number;
+  type: 'critical' | 'warning' | 'suggestion';
+  category: string;
+  issue: string;
+  fix: string;
+}
+
 export interface AnalysisResult {
   overallScore: number;
   categories: CategoryScore[];
   highlights: Highlight[];
   summary: string;
+  annotations: InlineAnnotation[];
 }
 
 export interface CategoryScore {
@@ -670,6 +681,221 @@ function scoreTechnicalSEO(content: ParsedContent): CategoryScore | null {
   };
 }
 
+// ─── Inline annotation generation ───
+
+function generateAnnotations(content: ParsedContent): InlineAnnotation[] {
+  const annotations: InlineAnnotation[] = [];
+  const text = content.text;
+  const lower = text.toLowerCase();
+
+  // 1. Flag vague openers
+  for (const opener of VAGUE_OPENERS) {
+    const idx = lower.indexOf(opener);
+    if (idx !== -1) {
+      annotations.push({
+        text: text.substring(idx, idx + opener.length),
+        startIndex: idx,
+        endIndex: idx + opener.length,
+        type: 'critical',
+        category: 'Definitive Language',
+        issue: 'Vague filler phrase. LLMs skip generic intros.',
+        fix: 'Delete this phrase and start with a direct, definitive statement. Example: "[Topic] is the process of..."',
+      });
+    }
+  }
+
+  // 2. Flag hype words
+  for (const hype of HYPE_WORDS) {
+    const regex = new RegExp(`\\b${hype}\\b`, 'gi');
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const replacements: Record<string, string> = {
+        'amazing': 'effective',
+        'incredible': 'significant',
+        'revolutionary': 'innovative',
+        'game-changing': 'impactful',
+        'groundbreaking': 'novel',
+        'mind-blowing': 'notable',
+        'unbelievable': 'substantial',
+        'insane': 'significant',
+        'crazy': 'notable',
+        'awesome': 'strong',
+        'epic': 'major',
+        'stunning': 'striking',
+        'breathtaking': 'remarkable',
+        'ultimate': 'comprehensive',
+        'best ever': 'top-performing',
+        'unprecedented': 'first-of-its-kind',
+        'jaw-dropping': 'remarkable',
+        'killer': 'high-performing',
+        'must-have': 'essential',
+        'skyrocket': 'increase significantly',
+      };
+      annotations.push({
+        text: match[0],
+        startIndex: match.index,
+        endIndex: match.index + match[0].length,
+        type: 'warning',
+        category: 'Balanced Sentiment',
+        issue: 'Hype language. LLMs prefer analyst-style writing over promotional tone.',
+        fix: `Replace with measured language. Try: "${replacements[hype] || 'notable'}"`,
+      });
+    }
+  }
+
+  // 3. Flag headings that aren't questions
+  for (const heading of content.headings) {
+    const isQuestion = heading.text.includes('?') ||
+      /^(?:what|how|why|when|where|who|which|can|do|does|is|are|should|will)\b/i.test(heading.text.trim());
+    if (!isQuestion && heading.level >= 2) {
+      const idx = text.indexOf(heading.text);
+      if (idx !== -1) {
+        annotations.push({
+          text: heading.text,
+          startIndex: idx,
+          endIndex: idx + heading.text.length,
+          type: 'suggestion',
+          category: 'Question + Answer Structure',
+          issue: 'This heading is not a question. Question-based headers get 2x more citations.',
+          fix: `Rewrite as a question. Example: "What Is ${heading.text}?" or "How Does ${heading.text} Work?"`,
+        });
+      }
+    }
+  }
+
+  // 4. Flag first paragraph if it lacks a definitive statement
+  if (content.paragraphs.length > 0) {
+    const firstPara = content.paragraphs[0];
+    const definitiveCount = countDefinitiveStatements(firstPara);
+    if (definitiveCount === 0 && firstPara.length > 30) {
+      const idx = text.indexOf(firstPara);
+      if (idx !== -1) {
+        annotations.push({
+          text: firstPara.length > 120 ? firstPara.substring(0, 120) + '...' : firstPara,
+          startIndex: idx,
+          endIndex: idx + Math.min(firstPara.length, 120),
+          type: 'critical',
+          category: 'Front-Loading (Ski Ramp)',
+          issue: 'First paragraph lacks a clear topic definition. 44.2% of citations come from the first 30% of a page.',
+          fix: 'Start with a definitive statement: "[Topic] is [clear definition]." State your conclusion or key point immediately.',
+        });
+      }
+    }
+  }
+
+  // 5. Flag paragraphs with low entity density
+  for (const para of content.paragraphs) {
+    if (para.split(/\s+/).length < 15) continue; // skip short paragraphs
+    const density = entityDensity(para);
+    if (density < 0.03) {
+      const idx = text.indexOf(para);
+      if (idx !== -1) {
+        annotations.push({
+          text: para.length > 120 ? para.substring(0, 120) + '...' : para,
+          startIndex: idx,
+          endIndex: idx + Math.min(para.length, 120),
+          type: 'warning',
+          category: 'Entity Richness',
+          issue: `Low entity density (${(density * 100).toFixed(1)}%) in this paragraph. Cited text averages 20.6%.`,
+          fix: 'Add specific names: tools (e.g., "Google Search Console"), brands, frameworks, stats, or industry terms. Replace generic phrases with named examples.',
+        });
+      }
+    }
+  }
+
+  // 6. Flag overly long sentences
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  for (const sentence of sentences) {
+    const wordCount = sentence.split(/\s+/).length;
+    if (wordCount > 35) {
+      const idx = text.indexOf(sentence);
+      if (idx !== -1) {
+        annotations.push({
+          text: sentence.length > 120 ? sentence.substring(0, 120) + '...' : sentence,
+          startIndex: idx,
+          endIndex: idx + Math.min(sentence.length, 120),
+          type: 'suggestion',
+          category: 'Business-Grade Writing',
+          issue: `This sentence is ${wordCount} words long. Cited content uses clear, moderate-length sentences.`,
+          fix: 'Break into 2-3 shorter sentences with clear subject-verb-object structure. Aim for 12-22 words per sentence.',
+        });
+      }
+    }
+  }
+
+  // 7. Flag question headings without direct answers
+  for (const heading of content.headings) {
+    const isQuestion = heading.text.includes('?') ||
+      /^(?:what|how|why|when|where|who|which|can|do|does|is|are|should|will)\b/i.test(heading.text.trim());
+    if (isQuestion) {
+      const headingIdx = text.indexOf(heading.text);
+      if (headingIdx === -1) continue;
+      const afterHeading = text.substring(headingIdx + heading.text.length, headingIdx + heading.text.length + 300);
+      const firstSentence = afterHeading.split(/[.!?]/)[0]?.trim() || '';
+      if (firstSentence.length > 10 && !/\b(?:is|are|refers to|means|involves|consists of|includes|was|were)\b/i.test(firstSentence)) {
+        const sentenceIdx = text.indexOf(firstSentence, headingIdx);
+        if (sentenceIdx !== -1) {
+          annotations.push({
+            text: firstSentence.length > 120 ? firstSentence.substring(0, 120) + '...' : firstSentence,
+            startIndex: sentenceIdx,
+            endIndex: sentenceIdx + Math.min(firstSentence.length, 120),
+            type: 'suggestion',
+            category: 'Question + Answer Structure',
+            issue: 'The paragraph after this question heading doesn\'t start with a direct answer.',
+            fix: 'LLMs treat headers as prompts. Start the next paragraph with a direct answer: "[Subject] is..." or "[Subject] refers to..."',
+          });
+        }
+      }
+    }
+  }
+
+  // 8. Flag content missing conclusion/takeaway in first 30%
+  const first30 = Math.floor(text.length * 0.3);
+  const firstSection = text.substring(0, first30);
+  const conclusionPattern = /\b(?:key takeaway|in short|the answer is|the result is|conclusion|bottom line|tl;dr|summary)\b/i;
+  if (!conclusionPattern.test(firstSection) && text.length > 500) {
+    // Check if conclusion appears later
+    const laterMatch = conclusionPattern.exec(text.substring(first30));
+    if (laterMatch) {
+      const idx = first30 + laterMatch.index;
+      annotations.push({
+        text: text.substring(idx, Math.min(idx + 80, text.length)),
+        startIndex: idx,
+        endIndex: Math.min(idx + 80, text.length),
+        type: 'suggestion',
+        category: 'Front-Loading (Ski Ramp)',
+        issue: 'Your key takeaway appears late in the content. LLMs heavily weight the top of the page.',
+        fix: 'Move this conclusion or a summary version of it to the first 1-2 paragraphs.',
+      });
+    }
+  }
+
+  // Sort by position in document
+  annotations.sort((a, b) => a.startIndex - b.startIndex);
+
+  // Deduplicate overlapping annotations (keep the higher priority one)
+  const typePriority = { critical: 0, warning: 1, suggestion: 2 };
+  const deduped: InlineAnnotation[] = [];
+  for (const ann of annotations) {
+    const overlaps = deduped.some(
+      (existing) => ann.startIndex < existing.endIndex && ann.endIndex > existing.startIndex
+    );
+    if (!overlaps) {
+      deduped.push(ann);
+    } else {
+      // Replace if higher priority
+      const overlapIdx = deduped.findIndex(
+        (existing) => ann.startIndex < existing.endIndex && ann.endIndex > existing.startIndex
+      );
+      if (overlapIdx !== -1 && typePriority[ann.type] < typePriority[deduped[overlapIdx].type]) {
+        deduped[overlapIdx] = ann;
+      }
+    }
+  }
+
+  return deduped;
+}
+
 // ─── Main analyze function ───
 
 export function analyzeContent(content: ParsedContent): AnalysisResult {
@@ -730,5 +956,8 @@ export function analyzeContent(content: ParsedContent): AnalysisResult {
     summary = 'This content is not currently optimized for LLM citations. Major restructuring is recommended based on the findings below.';
   }
 
-  return { overallScore, categories, highlights, summary };
+  // Generate inline annotations
+  const annotations = generateAnnotations(content);
+
+  return { overallScore, categories, highlights, summary, annotations };
 }
