@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    serverComponentsExternalPackages: ['mammoth'],
-  },
+  output: 'export',
+  basePath: '/grader',
+  images: { unoptimized: true },
 };
 
 module.exports = nextConfig;

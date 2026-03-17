@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import { analyzeContent, ParsedContent } from '@/lib/analyzer';
+import { parseText, parseHTML } from '@/lib/parsers';
 
 const Buddy = dynamic(() => import('./buddy'), { ssr: false });
 
@@ -908,21 +910,36 @@ export default function Home() {
   const handleFileUpload = async (file: File) => {
     setLoading(true);
     setError('');
-    const formData = new FormData();
-    formData.append('file', file);
 
     try {
-      const res = await fetch('/api/analyze-document', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Analysis failed'); return; }
+      const fileName = file.name.toLowerCase();
+      let content: ParsedContent;
 
-      setCurrentResult(data.result);
-      setCurrentFileName(data.fileName);
-      setCurrentDocText(data.documentText || '');
-      saveToHistory(data.result, data.fileName, 'document', data.documentText || '');
+      if (fileName.endsWith('.docx')) {
+        const mammoth = (await import('mammoth')).default;
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.convertToHtml({ arrayBuffer });
+        content = parseHTML(result.value);
+      } else if (fileName.endsWith('.html') || fileName.endsWith('.htm')) {
+        const text = await file.text();
+        content = parseHTML(text);
+      } else if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
+        const text = await file.text();
+        content = parseText(text, file.name);
+      } else {
+        setError('Unsupported file type. Upload .docx, .html, .txt, or .md files.');
+        return;
+      }
+
+      const result = analyzeContent(content);
+      setCurrentResult(result);
+      setCurrentFileName(file.name);
+      setCurrentDocText(content.text);
+      saveToHistory(result, file.name, 'document', content.text);
       setView('results');
-    } catch {
-      setError('Failed to connect. Make sure the app is running.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Analysis failed: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -934,17 +951,38 @@ export default function Home() {
     setError('');
 
     try {
-      const res = await fetch('/api/analyze-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url.trim() }) });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Analysis failed'); return; }
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url.trim());
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+          throw new Error('Invalid protocol');
+        }
+      } catch {
+        setError('Invalid URL. Include http:// or https://');
+        return;
+      }
 
-      setCurrentResult(data.result);
-      setCurrentFileName(data.url || url);
-      setCurrentDocText(data.documentText || '');
-      saveToHistory(data.result, data.url || url, 'url', data.documentText || '', data.url);
+      // Use allorigins CORS proxy for client-side fetching
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(parsedUrl.toString())}`;
+      const response = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+
+      if (!response.ok) {
+        setError(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+        return;
+      }
+
+      const html = await response.text();
+      const content = parseHTML(html);
+      const result = analyzeContent(content);
+
+      setCurrentResult(result);
+      setCurrentFileName(parsedUrl.toString());
+      setCurrentDocText(content.text);
+      saveToHistory(result, parsedUrl.toString(), 'url', content.text, parsedUrl.toString());
       setView('results');
-    } catch {
-      setError('Failed to connect. Make sure the app is running.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Analysis failed: ${message}`);
     } finally {
       setLoading(false);
     }
