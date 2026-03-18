@@ -16,11 +16,14 @@ interface PupState {
   stateTimer: number;
   walkSpeed: number;
   awake: boolean;
+  SLEEP_AFTER: number;
   t: number;
   path: { x: number; y: number }[];
   pathIdx: number;
   targetX: number;
   targetY: number;
+  dhTargetX: number;
+  dhTargetY: number;
 }
 
 // ── Palettes ──
@@ -113,7 +116,7 @@ function drawWinnie(ctx: CanvasRenderingContext2D, pup: PupState, theme: string)
   // Legs
   const ly = 17 + headDip;
   c.fillStyle = p.body;
-  if (pup.state === 'walk') {
+  if (pup.state === 'walk' || pup.state === 'goHome') {
     const s = f;
     c.fillRect(5, ly, 2, s < 2 ? 4 : 3); c.fillRect(7, ly, 2, s < 2 ? 3 : 4);
     c.fillRect(9, ly, 2, s >= 2 ? 4 : 3); c.fillRect(11, ly, 2, s >= 2 ? 3 : 4);
@@ -194,7 +197,7 @@ function drawBear(ctx: CanvasRenderingContext2D, pup: PupState, theme: string) {
   // Legs
   const ly = 17 + headDip;
   c.fillStyle = p.body;
-  if (pup.state === 'walk') {
+  if (pup.state === 'walk' || pup.state === 'goHome') {
     const s = f;
     c.fillRect(4, ly, 2, s < 2 ? 4 : 3); c.fillRect(6, ly, 2, s < 2 ? 3 : 4);
     c.fillRect(9, ly, 2, s >= 2 ? 4 : 3); c.fillRect(11, ly, 2, s >= 2 ? 3 : 4);
@@ -289,14 +292,17 @@ export default function Buddy({ theme }: { theme: string }) {
   const signCanvasRef = useRef<HTMLCanvasElement>(null);
   const pupRef = useRef<PupState>({
     x: 100, y: 60, dir: 1, state: 'walk', frame: 0,
-    stateTimer: Date.now(), walkSpeed: 0.4, awake: true, t: 0,
+    stateTimer: Date.now(), walkSpeed: 0.3, awake: true, SLEEP_AFTER: 120000, t: 0,
     path: [], pathIdx: 0, targetX: 0, targetY: 0,
+    dhTargetX: 0, dhTargetY: 0,
   });
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number>(0);
   const activePetRef = useRef<ActivePet>('winnie');
   const [activePet, setActivePet] = useState<ActivePet>('winnie');
+  const [sleeping, setSleeping] = useState(false);
   const swapTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sleepTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const drawHouseAndSign = useCallback((pet: ActivePet) => {
     const dhCtx = dhCanvasRef.current?.getContext('2d');
@@ -322,23 +328,33 @@ export default function Buddy({ theme }: { theme: string }) {
     switchPet(next);
   }, [switchPet]);
 
+  const getDHPos = useCallback(() => {
+    const dh = dhCanvasRef.current;
+    const container = containerRef.current?.parentElement;
+    if (!dh || !container) return { x: 0, y: 0 };
+    const dhR = dh.getBoundingClientRect();
+    const aR = container.getBoundingClientRect();
+    return { x: dhR.left - aR.left + 20, y: dhR.top + window.scrollY - aR.top };
+  }, []);
+
   const setupPath = useCallback(() => {
     const container = containerRef.current?.parentElement;
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const dhEl = dhCanvasRef.current;
-    // Walk horizontally at doghouse level, like Richmans Sport dashboard
-    const dhBottom = dhEl ? dhEl.getBoundingClientRect().bottom - rect.top : 60;
+    const sY = window.scrollY;
+    const dhBottom = dhEl ? dhEl.getBoundingClientRect().bottom + sY - rect.top : 60;
     const walkY = dhBottom - 48;
-    const w = rect.width - 48;
+    const left = 0;
+    const right = rect.width - 48;
     pupRef.current.path = [
-      { x: 0, y: walkY },
-      { x: w, y: walkY },
+      { x: left, y: walkY },
+      { x: right, y: walkY },
     ];
     pupRef.current.pathIdx = 0;
-    pupRef.current.x = 0;
+    pupRef.current.x = left;
     pupRef.current.y = walkY;
-    pupRef.current.targetX = w;
+    pupRef.current.targetX = right;
     pupRef.current.targetY = walkY;
     pupRef.current.pathIdx = 1;
   }, []);
@@ -358,6 +374,39 @@ export default function Buddy({ theme }: { theme: string }) {
     };
   }, [togglePet]);
 
+  const goToSleep = useCallback(() => {
+    const pup = pupRef.current;
+    pup.state = 'sleep';
+    pup.awake = false;
+    setSleeping(true);
+    const pos = getDHPos();
+    pup.x = pos.x;
+    pup.y = pos.y;
+  }, [getDHPos]);
+
+  const wakePuppy = useCallback(() => {
+    const pup = pupRef.current;
+    if (pup.awake) return;
+    if (sleepTimeoutRef.current) { clearTimeout(sleepTimeoutRef.current); sleepTimeoutRef.current = null; }
+    pup.awake = true;
+    pup.state = 'wakeUp';
+    pup.stateTimer = Date.now();
+    pup.frame = 0;
+    setSleeping(false);
+    const pos = getDHPos();
+    pup.x = pos.x;
+    pup.y = pos.y;
+  }, [getDHPos]);
+
+  const sendToSleep = useCallback(() => {
+    const pup = pupRef.current;
+    if (!pup.awake || pup.state === 'goHome') return;
+    pup.state = 'goHome';
+    const pos = getDHPos();
+    pup.dhTargetX = pos.x;
+    pup.dhTargetY = pos.y;
+  }, [getDHPos]);
+
   useEffect(() => {
     setupPath();
 
@@ -369,7 +418,48 @@ export default function Buddy({ theme }: { theme: string }) {
       const now = Date.now();
       pup.t += 0.015;
 
-      if (pup.state === 'pet' || pup.state === 'treat') {
+      if (pup.state === 'goHome') {
+        // Walk toward doghouse at faster speed
+        pup.frame += 0.025;
+        const dx = pup.dhTargetX - pup.x, dy = pup.dhTargetY - pup.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 3) {
+          // Arrived - go to sleep
+          goToSleep();
+          if (sleepTimeoutRef.current) clearTimeout(sleepTimeoutRef.current);
+          sleepTimeoutRef.current = setTimeout(() => wakePuppy(), 60000);
+        } else {
+          pup.x += dx / dist * 1.2;
+          pup.y += dy / dist * 1.2;
+          if (Math.abs(dx) > 1) pup.dir = dx > 0 ? 1 : -1;
+        }
+      } else if (pup.state === 'wakeUp') {
+        // Head shake animation for 2 seconds then walk
+        pup.frame += 0.08;
+        const elapsed = now - pup.stateTimer;
+        pup.dir = Math.sin(elapsed * 0.02) > 0 ? 1 : -1;
+        if (elapsed > 2000) {
+          pup.state = 'walk'; pup.stateTimer = now; pup.dir = 1;
+          // Rebuild path at doghouse level, walk toward further end
+          const container = containerRef.current?.parentElement;
+          const dhEl = dhCanvasRef.current;
+          if (container && dhEl) {
+            const rect = container.getBoundingClientRect();
+            const sY = window.scrollY;
+            const dhBottom = dhEl.getBoundingClientRect().bottom + sY - rect.top;
+            const walkY = dhBottom - 48;
+            const left = 0;
+            const right = rect.width - 48;
+            pup.path = [{ x: left, y: walkY }, { x: right, y: walkY }];
+            pup.y = walkY;
+            const distLeft = Math.abs(pup.x - left);
+            const distRight = Math.abs(pup.x - right);
+            pup.pathIdx = distRight > distLeft ? 1 : 0;
+            pup.targetX = pup.path[pup.pathIdx].x;
+            pup.targetY = walkY;
+          }
+        }
+      } else if (pup.state === 'pet' || pup.state === 'treat') {
         pup.frame += 0.04;
         if (now - pup.stateTimer > 3000) { pup.state = 'walk'; pup.stateTimer = now; }
       } else if (pup.state === 'walk' && pup.awake) {
@@ -382,14 +472,14 @@ export default function Buddy({ theme }: { theme: string }) {
           pup.pathIdx = (pup.pathIdx + 1) % pup.path.length;
           pup.targetX = pup.path[pup.pathIdx].x;
           pup.targetY = pup.path[pup.pathIdx].y;
+          const ndx = pup.targetX - pup.x;
+          if (Math.abs(ndx) > 1) pup.dir = ndx > 0 ? 1 : -1;
         } else {
           pup.x += dx / dist * pup.walkSpeed;
           pup.y += dy / dist * pup.walkSpeed;
         }
         if (Math.abs(dx) > 1) pup.dir = dx > 0 ? 1 : -1;
-        if (now - pup.stateTimer > 120000) {
-          pup.state = 'sleep'; pup.awake = false;
-        }
+        if (now - pup.stateTimer > pup.SLEEP_AFTER) sendToSleep();
       } else if (pup.state === 'sit') {
         pup.frame += 0.01;
         if (now - pup.stateTimer > 3000) {
@@ -397,16 +487,11 @@ export default function Buddy({ theme }: { theme: string }) {
           pup.pathIdx = (pup.pathIdx + 1) % pup.path.length;
           pup.targetX = pup.path[pup.pathIdx].x;
           pup.targetY = pup.path[pup.pathIdx].y;
+          const ndx = pup.targetX - pup.x;
+          if (Math.abs(ndx) > 1) pup.dir = ndx > 0 ? 1 : -1;
         }
       } else if (pup.state === 'sleep') {
         pup.frame += 0.01;
-      } else if (pup.state === 'wakeUp') {
-        pup.frame += 0.08;
-        pup.dir = Math.sin((now - pup.stateTimer) * 0.02) > 0 ? 1 : -1;
-        if (now - pup.stateTimer > 2000) {
-          pup.state = 'walk'; pup.stateTimer = now; pup.dir = 1;
-          setupPath();
-        }
       }
 
       // Draw active pet
@@ -416,12 +501,13 @@ export default function Buddy({ theme }: { theme: string }) {
         drawBear(ctx, pup, theme);
       }
 
-      // Position the canvas element
+      // Position the canvas element and show/hide
       const el = canvasRef.current?.parentElement;
       if (el) {
         el.style.left = pup.x + 'px';
         el.style.top = pup.y + 'px';
-        el.style.transform = pup.dir < 0 ? 'scaleX(-1)' : '';
+        el.style.transform = pup.dir > 0 ? 'scaleX(-1)' : '';
+        el.style.display = pup.state === 'sleep' ? 'none' : '';
       }
 
       animRef.current = requestAnimationFrame(loop);
@@ -438,15 +524,12 @@ export default function Buddy({ theme }: { theme: string }) {
       cancelAnimationFrame(animRef.current);
       window.removeEventListener('resize', handleResize);
     };
-  }, [theme, setupPath]);
+  }, [theme, setupPath, goToSleep, wakePuppy, sendToSleep]);
 
   const handleClick = () => {
     const pup = pupRef.current;
     if (!pup.awake) {
-      pup.awake = true;
-      pup.state = 'wakeUp';
-      pup.stateTimer = Date.now();
-      pup.frame = 0;
+      wakePuppy();
       return;
     }
     const act = Math.random() > 0.5 ? 'pet' : 'treat';
@@ -458,14 +541,9 @@ export default function Buddy({ theme }: { theme: string }) {
   const handleDoghouseClick = () => {
     const pup = pupRef.current;
     if (!pup.awake) {
-      pup.awake = true;
-      pup.state = 'wakeUp';
-      pup.stateTimer = Date.now();
+      wakePuppy();
     } else {
-      pup.state = 'sleep';
-      pup.awake = false;
-      pup.x = -100;
-      pup.y = -100;
+      sendToSleep();
     }
   };
 
@@ -478,7 +556,7 @@ export default function Buddy({ theme }: { theme: string }) {
       >
         <div className="relative cursor-pointer" onClick={handleDoghouseClick}>
           <canvas ref={dhCanvasRef} width={40} height={26} style={{ width: 80, height: 52, imageRendering: 'pixelated' }} />
-          {!pupRef.current.awake && (
+          {sleeping && (
             <div className="absolute -top-3 right-2 flex gap-0.5 pointer-events-none">
               <span className="text-xs font-bold animate-pulse" style={{ color: 'var(--accent)' }}>z</span>
               <span className="text-sm font-bold animate-pulse" style={{ color: 'var(--accent)', animationDelay: '0.3s' }}>z</span>
