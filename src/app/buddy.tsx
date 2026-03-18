@@ -326,20 +326,20 @@ export default function Buddy({ theme }: { theme: string }) {
     const container = containerRef.current?.parentElement;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const pad = 10;
-    const w = rect.width - 60;
-    const h = rect.height - 30;
+    const dhEl = dhCanvasRef.current;
+    // Walk horizontally at doghouse level, like Richmans Sport dashboard
+    const dhBottom = dhEl ? dhEl.getBoundingClientRect().bottom - rect.top : 60;
+    const walkY = dhBottom - 48;
+    const w = rect.width - 48;
     pupRef.current.path = [
-      { x: pad, y: pad },
-      { x: w, y: pad },
-      { x: w, y: h },
-      { x: pad, y: h },
+      { x: 0, y: walkY },
+      { x: w, y: walkY },
     ];
     pupRef.current.pathIdx = 0;
-    pupRef.current.x = pad;
-    pupRef.current.y = pad;
+    pupRef.current.x = 0;
+    pupRef.current.y = walkY;
     pupRef.current.targetX = w;
-    pupRef.current.targetY = pad;
+    pupRef.current.targetY = walkY;
     pupRef.current.pathIdx = 1;
   }, []);
 
