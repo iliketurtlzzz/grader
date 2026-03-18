@@ -489,16 +489,17 @@ export default function Buddy({ theme }: { theme: string }) {
         <div className="flex flex-col items-center ml-1 mb-1">
           <canvas ref={signCanvasRef} width={28} height={22} style={{ width: 56, height: 44, imageRendering: 'pixelated' }} />
         </div>
-        {/* Pet toggle button */}
-        <button
-          onClick={togglePet}
-          title={activePet === 'winnie' ? 'Switch to Happy Bear' : 'Switch to Winnie'}
-          className="ml-2 mb-1 text-lg cursor-pointer hover:scale-110 transition-transform select-none"
-          style={{ background: 'none', border: 'none', padding: '2px 4px' }}
-        >
-          {activePet === 'winnie' ? '\u{1F43B}' : '\u{1F415}'}
-        </button>
       </div>
+
+      {/* Pet toggle button - fixed top right */}
+      <button
+        onClick={togglePet}
+        title={activePet === 'winnie' ? 'Switch to Happy Bear' : 'Switch to Winnie'}
+        className="fixed top-4 right-4 text-2xl cursor-pointer hover:scale-110 transition-transform select-none z-50"
+        style={{ background: 'none', border: 'none', padding: '4px 8px' }}
+      >
+        {activePet === 'winnie' ? '\u{1F415}' : '\u{1F43B}'}
+      </button>
 
       {/* Walking pet */}
       <div
